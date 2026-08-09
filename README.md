@@ -490,6 +490,48 @@ server's scrape config at `n8n:5678` and `metrics-exporter:9464` (or
 add Prometheus/Grafana on top; nothing here depends on that piece
 existing.
 
+### Running the published metrics-exporter image from GHCR
+
+`n8n` itself isn't built by this repo — the `n8n` service runs the
+official `n8nio/n8n` image straight from Docker Hub, so there's nothing
+of "n8n" for this repo to own or publish. `metrics-exporter/` is the one
+real buildable artifact here, and `.github/workflows/docker-publish.yml`
+builds and pushes it to GitHub Container Registry on every push to
+`main`, tagged `latest` and by short commit SHA:
+
+```
+ghcr.io/youssefachraf/training-platform-chatbot-n8n-metrics-exporter:latest
+```
+
+It's a public package, so it pulls with no login:
+
+```bash
+docker pull ghcr.io/youssefachraf/training-platform-chatbot-n8n-metrics-exporter:latest
+```
+
+To run it standalone against an n8n instance that's already up (adjust
+`N8N_BASE_URL` if n8n isn't on the same Docker host — `host.docker.internal`
+reaches a locally-run n8n from inside this container the same way the
+backend URL does elsewhere in this doc):
+
+```bash
+docker run -d --name metrics-exporter -p 9464:9464 \
+  -e N8N_BASE_URL=http://host.docker.internal:5678 \
+  -e N8N_OWNER_EMAIL=admin@localhost.local \
+  -e N8N_OWNER_PASSWORD=ChangeMe123456! \
+  ghcr.io/youssefachraf/training-platform-chatbot-n8n-metrics-exporter:latest
+```
+
+Then the same two endpoints described above are reachable at:
+
+- `http://localhost:9464/metrics` — the Prometheus metrics
+- `http://localhost:9464/healthz` — liveness check
+
+This is only an alternative way to *run* the exporter (e.g. pointing it
+at an n8n instance from a separate machine, without cloning this repo).
+Day-to-day local development still uses `docker compose up -d`, which
+builds `metrics-exporter/` from source rather than pulling this image.
+
 ## Resetting to a clean slate
 
 ```bash
