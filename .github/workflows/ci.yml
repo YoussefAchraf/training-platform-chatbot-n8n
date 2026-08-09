@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  validate-workflows:
+    name: Validate n8n workflow exports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: JSON.parse every *.n8n.json file
+        run: |
+          node -e "
+            const fs = require('fs');
+            const files = fs.readdirSync('.').filter(f => f.endsWith('.n8n.json'));
+            if (files.length === 0) throw new Error('No *.n8n.json files found');
+            for (const f of files) {
+              try {
+                JSON.parse(fs.readFileSync(f, 'utf8'));
+                console.log('OK  ', f);
+              } catch (err) {
+                console.error('FAIL', f, err.message);
+                process.exitCode = 1;
+              }
+            }
+          "
+
+  metrics-exporter-install:
+    name: metrics-exporter installs cleanly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+          cache-dependency-path: metrics-exporter/package-lock.json
+      - run: npm ci
+        working-directory: metrics-exporter

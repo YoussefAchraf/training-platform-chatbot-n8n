@@ -1,0 +1,76 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}"]
+    # Loopback-only: n8n reaches this over the internal Docker network by
+    # service name (redis:6379) regardless - this publish is only for local
+    # host-side inspection (redis-cli), not something the chatbot itself
+    # needs. Previously bound to all interfaces with no password at all,
+    # which meant anything on the same network as this host could read/write
+    # the rate-limit and FAQ-cache data with zero auth.
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    entrypoint: ["sh", "/entrypoint.sh"]
+    # Loopback-only - both the frontend's chatbot widget and the browser
+    # hitting the editor UI are on this same machine (N8N_WEBHOOK_URL and
+    # VITE_CHATBOT_WEBHOOK_URL both point at localhost already), and the
+    # editor login is still the documented default password. Previously
+    # bound to all interfaces, so that default-credentialed editor - and the
+    # webhook itself - were reachable from anything on the same network.
+    ports:
+      - "127.0.0.1:5678:5678"
+    env_file:
+      - .env
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./training-platform-chatbot.n8n.json:/home/node/training-platform-chatbot.n8n.json:ro
+      - ./sub-workflow-sales.n8n.json:/home/node/sub-workflow-sales.n8n.json:ro
+      - ./sub-workflow-manager.n8n.json:/home/node/sub-workflow-manager.n8n.json:ro
+      - ./sub-workflow-instructor.n8n.json:/home/node/sub-workflow-instructor.n8n.json:ro
+      - ./sub-workflow-superadmin.n8n.json:/home/node/sub-workflow-superadmin.n8n.json:ro
+      - ./entrypoint.sh:/entrypoint.sh:ro
+      - ./bootstrap.js:/bootstrap.js:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  metrics-exporter:
+    build: ./metrics-exporter
+    restart: unless-stopped
+    # Loopback-only - exposes token counts/estimated cost per role, not
+    # meant for anything beyond a local Prometheus scrape config on this
+    # same machine.
+    ports:
+      - "127.0.0.1:9464:9464"
+    env_file:
+      - .env
+    environment:
+      N8N_BASE_URL: http://n8n:5678
+    depends_on:
+      n8n:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9464/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  n8n_data:

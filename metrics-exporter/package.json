@@ -1,0 +1,14 @@
+{
+  "name": "chatbot-metrics-exporter",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Polls n8n's execution history for the chatbot workflows and exposes token usage, cost, tool reliability, and request outcome as Prometheus metrics.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "flatted": "^3.3.1",
+    "prom-client": "^15.1.3"
+  }
+}

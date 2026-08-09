@@ -1,0 +1,50 @@
+name: Publish metrics-exporter to GHCR
+
+# n8n itself isn't built here - the n8n service in docker-compose.yml runs
+# the official n8nio/n8n image straight from Docker Hub, so there's no
+# n8n image for this repo to own. metrics-exporter/ is the one real
+# buildable artifact (its own Dockerfile), so that's what gets published.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "metrics-exporter/**"
+      - ".github/workflows/docker-publish.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/training-platform-chatbot-n8n-metrics-exporter
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./metrics-exporter
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

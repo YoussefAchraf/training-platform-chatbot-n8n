@@ -1,0 +1,1065 @@
+{
+  "id": "training-platform-chatbot-v2",
+  "name": "Training Platform - Secure Role-Aware Chatbot (MCP + AI Agent) v2",
+  "nodes": [
+    {
+      "id": "note-overview",
+      "name": "Sticky Note - Architecture Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        -900
+      ],
+      "parameters": {
+        "width": 980,
+        "height": 640,
+        "color": 4,
+        "content": "## Training Platform Chatbot - Architecture Overview (v2, full backend parity)\n\n**Flow**: Webhook -> Auth decode -> Rate limit -> Input guardrail (verify BEFORE any LLM call) -> FAQ cache check -> Role router (4 branches) -> (Sales | Manager | Instructor | SuperAdmin) AI Agent -> Output guardrail (re-verify AFTER generation) -> Cache store -> Respond. All four Agent branches reconverge on the same Output Guardrail node - no Merge node needed, since the Switch guarantees only one branch fires per request.\n\n### v2 changes vs the original file\n- Added a 4th role branch: **SuperAdmin** (bypasses every backend role check structurally - see roleMiddleware.ts - so its agent is wired to the full tool superset).\n- Full backend parity: every current route across auth, providers, trainings, clients, sessions, instructors, calendar, survey, reports, and /admin is now represented as a tool, consolidated into 30 tool nodes (down from a naive ~38) by merging same-HTTP-method, same-shape actions across entity types (e.g. one 'Create Catalog Entity' tool handles Provider/Training/Client creation via a dynamic URL segment, instead of 3 separate nodes) - HTTP method stays fixed per node (n8n tool nodes don't reliably support a dynamic method), only the URL path and body are parameterised via $fromAI.\n- Ownership-scoping is real backend behaviour that CANNOT be structurally gated by node wiring alone (unlike role gating): Sales/Manager can only edit/delete catalog items and sessions they personally created, Manager does NOT get an override, only SuperAdmin bypasses ownership. This is enforced in each Agent's system prompt AND independently re-enforced by the backend on every call - if a non-owner tries anyway, the tool call returns the backend's real 400 error and the agent must relay it honestly, never retry as a different user.\n\n### Security model (two independent layers - unchanged principle, now applies to 4 roles)\n1. **n8n layer (this workflow)** does a *best-effort, fast* role read by decoding the JWT payload (no signature check) purely to pick a system prompt and a tool subset. This is a UX/cost optimisation, NOT the security boundary.\n2. **Backend layer (authoritative)**: every HTTP Tool node forwards the user's *original, unmodified* Bearer token to training-platform-backend. authMiddleware verifies the signature; roleMiddleware re-checks the role (SuperAdmin bypasses structurally, exactly like the backend); each use-case re-checks ownership where relevant. Even a successful prompt-injection that convinces the model to 'act as SuperAdmin' still cannot reach a tool node this branch was never wired to, and even if it could, the backend independently rejects it. **Never remove the backend calls in favour of trusting n8n's role read.**\n\n### Verification layers (input BEFORE the LLM, output AFTER the LLM)\n- **Input Guardrail** (before any model call): length caps, prompt-injection/jailbreak regex blocklist, secret-name blocklist, HTML/script-tag stripping (defense-in-depth mirroring the backend's own sanitizeMiddleware - belt and suspenders, not a replacement for it), role-impersonation phrase detection (catches 'pretend I am a Manager' style social engineering aimed at the LLM, even though the real role always comes from the JWT, never from message text).\n- **Output Guardrail** (after the model replies, before the user sees it): leak-pattern regex (secrets, system prompt echo, internal tool names), a privilege-leak check specific to non-SuperAdmin roles (blocks SuperAdmin-only vocabulary like 'audit_log', 'password_hash', 'deactivate user' from ever appearing in a Sales/Manager/Instructor reply, which would indicate the guardrail upstream failed), and a hard reply-length cap (cost/abuse control - an unexpectedly massive reply gets truncated rather than sent in full).\n\n### Token economy techniques used here\n- **Static system prompt per role (CAG)**: fixed, byte-identical every call, placed first so provider-side prompt caching (Anthropic prompt caching / OpenAI prefix caching) can skip re-processing those tokens turn over turn.\n- **Redis exact-match FAQ cache**: only for answers that used no write tool and touched no dynamic per-user data; short TTL so it never serves stale session/report data.\n- **Windowed memory** (last 6 turns) - flat token cost per call instead of growing every turn.\n- **Zero-token pre-LLM guardrails**: auth, rate-limit, and input-safety are all deterministic checks that reject bad requests before a single token is spent.\n- **Structural role gating + tool consolidation**: 4 separate Agent nodes, each wired only to its allowed tool subset; the 30 tool nodes are shared/reused across branches (not duplicated), keeping the total node count in the file manageable even at full backend parity.\n- **Honest caveat**: SuperAdmin's tool subset is necessarily the largest (it can do everything), so its per-call tool-schema token floor is inherently higher than the other three roles - that's a real property of the role having the widest capability, not a design gap. If SuperAdmin chat usage is high-volume, consider a slimmer 'SuperAdmin-lite' agent for routine questions and reserving full tool access for a separate, explicitly-invoked admin flow.\n\n### Required setup before running\n- Env var `BACKEND_API_URL` (e.g. `https://api.yourdomain.com`) pointing at training-platform-backend.\n- Env var `MCP_SERVER_URL` if you stand up an MCP server (optional - see the MCP note near the SuperAdmin branch).\n- A Redis credential ('Redis account') for rate limiting + response caching.\n- A Google Gemini API credential ('googlePalmApi' credential type in n8n) for the Chat Model node.\n- All 30 tool nodes are wired to real, current backend routes as of this file's last update. If the backend's API surface changes again, update the affected Tool node(s) and the relevant Agent's system prompt together - they must stay in sync."
+      }
+    },
+    {
+      "id": "webhook-trigger",
+      "name": "Chat Webhook (Entry Point)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1600,
+        -180
+      ],
+      "webhookId": "training-platform-chatbot",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chatbot/message",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "notes": "Frontend calls POST /webhook/chatbot/message with header 'Authorization: Bearer <JWT>' (the SAME token training-platform-backend already issued at login) and JSON body { message: string, sessionId: string }. sessionId scopes the conversation memory - reuse the same value across turns in one chat window."
+    },
+    {
+      "id": "note-trigger",
+      "name": "Sticky Note - Trigger Contract",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        60
+      ],
+      "parameters": {
+        "width": 420,
+        "height": 200,
+        "color": 7,
+        "content": "### Entry contract\n```\nPOST /webhook/chatbot/message\nAuthorization: Bearer <existing backend JWT>\nContent-Type: application/json\n\n{ \"message\": \"...\", \"sessionId\": \"conv-123\" }\n```\nNo separate chatbot login - reuses the JWT from training-platform-backend's own /auth/login. The JWT's real `role`/`userId` claims are always the source of truth; this workflow never invents or upgrades a role."
+      }
+    },
+    {
+      "id": "code-decode-jwt",
+      "name": "Extract & Decode JWT (best-effort)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1360,
+        -180
+      ],
+      "parameters": {
+        "jsCode": "// Best-effort JWT payload decode for FAST routing only.\n// We deliberately do NOT verify the signature here - that would require\n// sharing the backend's JWT_SECRET with n8n, which is unnecessary secret\n// sprawl. Every tool call later in this workflow forwards the ORIGINAL\n// token to the backend, which verifies it for real. If someone tampers\n// with the payload, the backend's signature check rejects it there -\n// this decode only ever affects which system prompt/tools n8n *offers*,\n// never what the backend actually *allows*.\nconst headers = $input.item.json.headers || {};\nconst rawAuth = headers['authorization'] || headers['Authorization'] || '';\nconst token = rawAuth.startsWith('Bearer ') ? rawAuth.slice(7) : null;\n\nlet role = null;\nlet userId = null;\nlet exp = null;\nlet valid = false;\n\nif (token) {\n  const parts = token.split('.');\n  if (parts.length === 3) {\n    try {\n      const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));\n      role = payload.role || null;\n      userId = payload.userId || null;\n      exp = payload.exp || null;\n      const knownRoles = ['Sales', 'Manager', 'Instructor', 'SuperAdmin'];\n      valid = !!(role && knownRoles.includes(role) && userId && exp && exp * 1000 > Date.now());\n    } catch (err) {\n      valid = false;\n    }\n  }\n}\n\nconst body = $input.item.json.body || {};\nconst message = (body.message || '').toString().slice(0, 2000); // hard cap - also a cost guard\nconst sessionId = body.sessionId || `${userId || 'anon'}-${Date.now()}`;\n\nreturn [{\n  json: {\n    authHeader: rawAuth, // forwarded as-is to every backend tool call below\n    role,\n    userId,\n    valid,\n    message,\n    sessionId,\n  },\n}];\n"
+      }
+    },
+    {
+      "id": "if-auth-valid",
+      "name": "IF: Token Valid & Not Expired?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        -180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-valid",
+              "leftValue": "={{$json.valid}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "respond-401",
+      "name": "Respond 401 - Unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -900,
+        60
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 401,
+        "responseBody": "={{ { \"error\": \"Missing, malformed, expired, or unrecognized-role access token. Log in again.\" } }}"
+      }
+    },
+    {
+      "id": "redis-rate-incr",
+      "name": "Redis: Increment Rate Counter",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        -280
+      ],
+      "parameters": {
+        "operation": "incr",
+        "key": "={{ 'ratelimit:' + $json.userId + ':' + $now.format('yyyy-MM-dd-HH-mm') }}"
+      },
+      "credentials": {
+        "redis": {
+          "id": "redis-credential-auto",
+          "name": "Redis account"
+        }
+      },
+      "notes": "Per-user, per-minute bucket. Key naturally stops being reused after the minute rolls over; add an EXPIRE call here in production so old buckets don't linger in Redis forever."
+    },
+    {
+      "id": "code-normalize-rate",
+      "name": "Normalize Rate Counter Value",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        -280
+      ],
+      "parameters": {
+        "jsCode": "// Redis node output field naming has varied slightly across n8n versions.\n// Defensively pull whatever numeric value came back instead of assuming\n// one exact field name - verify against your n8n version if this ever\n// reads as undefined.\nconst prev = $('Extract & Decode JWT (best-effort)').item.json;\nconst redisOut = $json;\nconst count = redisOut.data ?? redisOut.value ?? redisOut.result ?? Object.values(redisOut)[0];\n\nreturn [{ json: { ...prev, rateCount: Number(count) || 0 } }];\n"
+      }
+    },
+    {
+      "id": "if-within-rate-limit",
+      "name": "IF: Within Rate Limit? (<=20/min)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        -280
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-rate",
+              "leftValue": "={{$json.rateCount}}",
+              "rightValue": 20,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "respond-429",
+      "name": "Respond 429 - Too Many Requests",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -240,
+        -40
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 429,
+        "responseBody": "={{ { \"error\": \"Too many messages - please wait a moment before sending another.\" } }}"
+      }
+    },
+    {
+      "id": "note-guardrails",
+      "name": "Sticky Note - Pre-LLM Guardrails",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1360,
+        140
+      ],
+      "parameters": {
+        "width": 660,
+        "height": 300,
+        "color": 3,
+        "content": "### Input Guardrail - verified BEFORE any LLM call\nAuth, rate-limit and input-safety are all cheap, deterministic, millisecond-scale checks. Rejecting bad requests here costs **zero LLM tokens** - the single biggest token-economy lever in the whole workflow.\n\nChecks performed: length caps, empty-message rejection, prompt-injection/jailbreak phrase blocklist, secret-name blocklist (jwt_secret, postgres_password, etc.), HTML/script-tag stripping (defense-in-depth - the backend's own sanitizeMiddleware already does this server-side; this is a second, independent layer, not a replacement), and role-impersonation phrase detection ('pretend I'm a Manager', 'act as SuperAdmin', etc. - harmless since role always comes from the JWT, but worth catching as a social-engineering signal against the LLM itself)."
+      }
+    },
+    {
+      "id": "code-input-guardrail",
+      "name": "Input Guardrail (verify BEFORE LLM)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const data = $('Normalize Rate Counter Value').item.json;\nlet msg = (data.message || '');\n\n// --- 1. HTML/script stripping (defense-in-depth; backend also sanitizes) ---\nconst stripped = msg\n  .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<[^>]+>/g, '')\n  .trim();\n\nconst lower = stripped.toLowerCase();\n\n// --- 2. Prompt-injection / jailbreak blocklist (cheap, no LLM call) ---\nconst injectionPatterns = [\n  /ignore (all|any|the) (previous|prior|above) instructions?/i,\n  /reveal (your|the) (system prompt|instructions)/i,\n  /you are now (dan|jailbroken|unrestricted)/i,\n  /pretend (you|to) (are|be) (an? )?(unrestricted|uncensored)/i,\n  /act as (if you have|an) no (restrictions|rules|guardrails)/i,\n  /disregard (your|all) (safety|security) (rules|guardrails|instructions)/i,\n];\n\n// --- 3. Secret-name blocklist ---\nconst secretPatterns = [\n  /\\bjwt_secret\\b/i,\n  /\\bpostgres_password\\b/i,\n  /\\bredis_password\\b/i,\n  /\\bsmtp_pass\\b/i,\n];\n\n// --- 4. Role-impersonation phrase detection (social engineering aimed at the LLM) ---\nconst roleImpersonationPatterns = [\n  /pretend (i'?m|i am|you'?re|you are) (a |an )?(manager|superadmin|super admin|instructor|sales)/i,\n  /act as (if )?(i'?m|i am) (a |an )?(manager|superadmin|super admin)/i,\n  /(grant|give) me (manager|superadmin|super admin|admin) (access|permissions|rights)/i,\n  /treat me as (a |an )?(manager|superadmin|super admin)/i,\n];\n\nconst tooLong = stripped.length > 1500;\nconst tooShort = stripped.length === 0;\nconst injectionHit = injectionPatterns.some((re) => re.test(stripped));\nconst secretHit = secretPatterns.some((re) => re.test(stripped));\nconst roleHit = roleImpersonationPatterns.some((re) => re.test(stripped));\n\nconst blocked = tooLong || tooShort || injectionHit || secretHit || roleHit;\nlet reason = null;\nif (tooShort) reason = 'empty_message';\nelse if (tooLong) reason = 'message_too_long';\nelse if (injectionHit) reason = 'blocked_injection_pattern';\nelse if (secretHit) reason = 'blocked_secret_reference';\nelse if (roleHit) reason = 'blocked_role_impersonation_attempt';\n\nreturn [{ json: { ...data, message: stripped, blocked, blockReason: reason } }];\n"
+      }
+    },
+    {
+      "id": "if-input-safe",
+      "name": "IF: Input Safe?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        380
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-safe",
+              "leftValue": "={{ !$json.blocked }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "respond-guardrail-refusal",
+      "name": "Respond 200 - Guardrail Refusal",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        640
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 200,
+        "responseBody": "={{ { \"reply\": \"I can't help with that request. If you think this is a mistake, try rephrasing your question about trainings, sessions, or your account.\" } }}"
+      }
+    },
+    {
+      "id": "note-greeting",
+      "name": "Sticky Note - First-Message Greeting",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        -160
+      ],
+      "parameters": {
+        "width": 460,
+        "height": 260,
+        "color": 7,
+        "content": "### First-message detection (deterministic, not inferred)\nRather than hoping the model notices its own memory is empty, a Redis flag (`session-greeted:{sessionId}`, 4h TTL) makes 'is this the user's first message in this session' a hard fact computed before the LLM ever runs. That fact is then: (1) injected as an explicit instruction into the prompt text only on the first turn, and (2) used to force first messages to bypass the FAQ cache entirely, so a first message that happens to match a cached answer still gets a proper greeting instead of a bare cached reply."
+      }
+    },
+    {
+      "id": "redis-get-greeted",
+      "name": "Redis: Get Session Greeted Flag",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        200,
+        40
+      ],
+      "parameters": {
+        "operation": "get",
+        "propertyName": "alreadyGreeted",
+        "key": "={{ 'session-greeted:' + $json.sessionId }}"
+      },
+      "credentials": {
+        "redis": {
+          "id": "redis-credential-auto",
+          "name": "Redis account"
+        }
+      },
+      "notes": "Empty/falsy result means this sessionId has never been seen before - first message of the conversation."
+    },
+    {
+      "id": "code-determine-first-message",
+      "name": "Code: Determine First Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        40
+      ],
+      "parameters": {
+        "jsCode": "// n8n's Redis \"get\" node REPLACES the item's json with just the fetched\n// property (confirmed by running this live, not assumed) - it does not\n// merge into the existing fields the way some other nodes do. So this\n// reconstructs the full payload from the known-good named source node\n// rather than trusting bare $json, same defensive pattern already used\n// by \"Normalize Rate Counter Value\" earlier in this workflow.\nconst original = $('Input Guardrail (verify BEFORE LLM)').item.json;\nconst alreadyGreeted = $json.alreadyGreeted;\nconst isFirstMessage = !alreadyGreeted;\nreturn [{ json: { ...original, isFirstMessage } }];\n"
+      }
+    },
+    {
+      "id": "if-first-message",
+      "name": "IF: First Message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        640,
+        40
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-first",
+              "leftValue": "={{$json.isFirstMessage}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "redis-set-greeted",
+      "name": "Redis: Mark Session Greeted",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        640,
+        260
+      ],
+      "parameters": {
+        "operation": "set",
+        "key": "={{ 'session-greeted:' + $json.sessionId }}",
+        "value": "1",
+        "expire": true,
+        "ttl": 14400
+      },
+      "credentials": {
+        "redis": {
+          "id": "redis-credential-auto",
+          "name": "Redis account"
+        }
+      },
+      "notes": "4h TTL - roughly one working session. Only written once per session (this branch only runs when isFirstMessage was true), not on every turn."
+    },
+    {
+      "id": "redis-cache-get",
+      "name": "Redis: Get Cached FAQ Response",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        200,
+        140
+      ],
+      "parameters": {
+        "operation": "get",
+        "propertyName": "cachedReply",
+        "key": "={{ 'faqcache:' + $('Code: Determine First Message').item.json.role + ':' + $('Code: Determine First Message').item.json.message.toLowerCase().trim().replace(/\\s+/g, ' ') }}"
+      },
+      "credentials": {
+        "redis": {
+          "id": "redis-credential-auto",
+          "name": "Redis account"
+        }
+      },
+      "notes": "Exact-match cache, keyed by role + normalised message text. Only ever populated for answers that did NOT call a write tool and touched no dynamic per-user data (see the cache-store step near the end)."
+    },
+    {
+      "id": "if-cache-hit",
+      "name": "IF: Cache Hit?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        420,
+        140
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-cache",
+              "leftValue": "={{$json.cachedReply}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "cond-not-first",
+              "leftValue": "={{ !$('Code: Determine First Message').item.json.isFirstMessage }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "notes": "A first-of-session message never takes the cache shortcut, even if it happens to text-match a cached FAQ answer - it always goes to the agent so the user gets a real greeting + role-appropriate suggestions instead of a bare cached string."
+    },
+    {
+      "id": "respond-cached",
+      "name": "Respond 200 - Cached Reply (0 tokens)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        640,
+        -140
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 200,
+        "responseBody": "={{ { \"reply\": $json.cachedReply, \"cached\": true } }}"
+      },
+      "notes": "Cache hit path never touches the LLM at all - fastest possible response and zero token cost for repeat FAQ-style questions."
+    },
+    {
+      "id": "note-role-router",
+      "name": "Sticky Note - Role Router",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        420,
+        380
+      ],
+      "parameters": {
+        "width": 520,
+        "height": 280,
+        "color": 5,
+        "content": "### Structural role gating (now 4 branches)\nThis Switch routes to one of FOUR SEPARATE Agent nodes (Sales, Manager, Instructor, SuperAdmin), each wired to its own tool subset at design time - not decided by the LLM at runtime. Even a successful prompt-injection that convinces the model to 'ignore its instructions and approve this user' still physically cannot call a tool from a branch it isn't in. The backend re-checks the role (and, for catalog/session writes, ownership) anyway - defense in depth, not the only protection."
+      }
+    },
+    {
+      "id": "switch-role-router",
+      "name": "Switch: Route by Role",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        640,
+        400
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Determine First Message').item.json.role }}",
+                    "rightValue": "Sales",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "Sales"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Determine First Message').item.json.role }}",
+                    "rightValue": "Manager",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "Manager"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Determine First Message').item.json.role }}",
+                    "rightValue": "Instructor",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "Instructor"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Determine First Message').item.json.role }}",
+                    "rightValue": "SuperAdmin",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "SuperAdmin"
+            }
+          ]
+        },
+        "fallbackOutput": "extra"
+      }
+    },
+    {
+      "id": "respond-403-role",
+      "name": "Respond 403 - Role Not Recognized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        860,
+        780
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 403,
+        "responseBody": "={{ { \"error\": \"Your account role isn't recognized by the assistant. Contact a Manager or SuperAdmin.\" } }}"
+      }
+    },
+    {
+      "id": "note-output-guardrail",
+      "name": "Sticky Note - Output Guardrail",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1700,
+        60
+      ],
+      "parameters": {
+        "width": 460,
+        "height": 260,
+        "color": 3,
+        "content": "### Output Guardrail - re-verified AFTER the LLM generates a reply\nA cheap regex pass on the model's own reply, run for every role, catching: accidental leakage (system prompt echoed back, a secret-shaped string, an internal tool name), a privilege-leak check specific to non-SuperAdmin roles (SuperAdmin-only vocabulary like 'audit_log', 'password_hash', 'deactivate user' should never appear in a Sales/Manager/Instructor reply - if it does, something upstream already went wrong and this is the last line of defense), and a hard reply-length cap. This is a last-resort net, not a substitute for the system-prompt instructions - both layers matter."
+      }
+    },
+    {
+      "id": "code-output-guardrail",
+      "name": "Output Guardrail (re-verify AFTER LLM)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Input Guardrail (verify BEFORE LLM)').item.json;\nlet reply = String($json.output || $json.text || $json.reply || '');\n\n// --- 1. Generic leak patterns (secrets, system prompt echo) ---\nconst leakPatterns = [\n  /jwt_secret/i,\n  /postgres_password/i,\n  /redis_password/i,\n  /smtp_pass/i,\n  /bearer [a-z0-9\\-_.]{20,}/i,\n  /you are the training platform assistant for an? (sales|manager|instructor|superadmin) user/i, // system prompt echoed back\n];\n\n// --- 2. Privilege-leak check: SuperAdmin-only vocabulary must never appear\n//     in a non-SuperAdmin reply. If it does, the upstream role-gating\n//     already failed somewhere - this is a last-resort net, not the fix.\nconst adminOnlyVocabulary = [\n  /\\baudit_log\\b/i,\n  /\\bpassword_hash\\b/i,\n  /deactivate(d)? (a |the )?user/i,\n  /\\bsuperadmin (role|access|privileges)\\b/i,\n];\nconst privilegeLeakHit = ctx.role !== 'SuperAdmin' && adminOnlyVocabulary.some((re) => re.test(reply));\n\nlet redacted = false;\nlet redactReason = null;\n\nif (leakPatterns.some((re) => re.test(reply))) {\n  redacted = true;\n  redactReason = 'leak_pattern';\n} else if (privilegeLeakHit) {\n  redacted = true;\n  redactReason = 'privilege_leak_for_role';\n}\n\nif (redacted) {\n  reply = \"I can't share that. Is there something else about trainings or sessions I can help with?\";\n}\n\n// --- 3. Hard length cap - cost/abuse control, not just leakage ---\nconst MAX_REPLY_CHARS = 4000;\nif (reply.length > MAX_REPLY_CHARS) {\n  reply = reply.slice(0, MAX_REPLY_CHARS) + '\\n\\n[Response truncated - ask a more specific question for full detail.]';\n}\n\n// Heuristic for cache eligibility: only cache answers that clearly didn't\n// touch dynamic/per-user data. Conservative on purpose - false negatives\n// (not caching something cacheable) just cost a few extra tokens next\n// time; false positives (caching something dynamic) would serve stale\n// session/report/user data, which is worse.\nconst dynamicHints = /(session|report|client|approved|created|instructor profile|user|audit|deactivat)/i;\nconst cacheable = !redacted && !dynamicHints.test(ctx.message);\n\nreturn [{\n  json: {\n    reply,\n    role: ctx.role,\n    message: ctx.message,\n    cacheable,\n  },\n}];\n"
+      }
+    },
+    {
+      "id": "if-cacheable",
+      "name": "IF: Cacheable Response?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-cacheable",
+              "leftValue": "={{$json.cacheable}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "redis-cache-set",
+      "name": "Redis: Store FAQ Response (5 min TTL)",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        2140,
+        200
+      ],
+      "parameters": {
+        "operation": "set",
+        "key": "={{ 'faqcache:' + $json.role + ':' + $json.message.toLowerCase().trim().replace(/\\s+/g, ' ') }}",
+        "value": "={{$json.reply}}",
+        "expire": true,
+        "ttl": 300
+      },
+      "credentials": {
+        "redis": {
+          "id": "redis-credential-auto",
+          "name": "Redis account"
+        }
+      },
+      "notes": "Short TTL (5 min) is deliberate: long enough to absorb a burst of the same question from multiple users, short enough that stale answers don't linger if the underlying policy/FAQ content changes."
+    },
+    {
+      "id": "respond-success",
+      "name": "Respond 200 - Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2360,
+        320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 200,
+        "responseBody": "={{ { \"reply\": $('Output Guardrail (re-verify AFTER LLM)').item.json.reply, \"cached\": false } }}"
+      }
+    },
+    {
+      "id": "code-build-subworkflow-input",
+      "name": "Code: Build Sub-workflow Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        -160
+      ],
+      "parameters": {
+        "jsCode": "// Redis nodes upstream (Get Session Greeted Flag, Get Cached FAQ\n// Response) replace $json entirely with just their own result field -\n// this rebuilds the clean payload each of the 4 role sub-workflows\n// needs, from the one node that still has every field: Code: Determine\n// First Message. This becomes the Execute Workflow node's input.\nconst ctx = $('Code: Determine First Message').item.json;\nreturn [{\n  json: {\n    message: ctx.message,\n    role: ctx.role,\n    userId: ctx.userId,\n    authHeader: ctx.authHeader,\n    isFirstMessage: ctx.isFirstMessage,\n    sessionId: ctx.sessionId,\n  },\n}];\n"
+      }
+    },
+    {
+      "id": "exec-sales-subworkflow",
+      "name": "Call Sub-workflow: Sales Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": "chatbot-sales-agent",
+        "mode": "once"
+      }
+    },
+    {
+      "id": "exec-manager-subworkflow",
+      "name": "Call Sub-workflow: Manager Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        460,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": "chatbot-manager-agent",
+        "mode": "once"
+      }
+    },
+    {
+      "id": "exec-instructor-subworkflow",
+      "name": "Call Sub-workflow: Instructor Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": "chatbot-instructor-agent",
+        "mode": "once"
+      }
+    },
+    {
+      "id": "exec-superadmin-subworkflow",
+      "name": "Call Sub-workflow: SuperAdmin Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        980,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": "chatbot-superadmin-agent",
+        "mode": "once"
+      }
+    }
+  ],
+  "connections": {
+    "Chat Webhook (Entry Point)": {
+      "main": [
+        [
+          {
+            "node": "Extract & Decode JWT (best-effort)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract & Decode JWT (best-effort)": {
+      "main": [
+        [
+          {
+            "node": "IF: Token Valid & Not Expired?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Token Valid & Not Expired?": {
+      "main": [
+        [
+          {
+            "node": "Redis: Increment Rate Counter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401 - Unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Increment Rate Counter": {
+      "main": [
+        [
+          {
+            "node": "Normalize Rate Counter Value",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Rate Counter Value": {
+      "main": [
+        [
+          {
+            "node": "IF: Within Rate Limit? (<=20/min)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Within Rate Limit? (<=20/min)": {
+      "main": [
+        [
+          {
+            "node": "Input Guardrail (verify BEFORE LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 429 - Too Many Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Guardrail (verify BEFORE LLM)": {
+      "main": [
+        [
+          {
+            "node": "IF: Input Safe?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Input Safe?": {
+      "main": [
+        [
+          {
+            "node": "Redis: Get Session Greeted Flag",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200 - Guardrail Refusal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Get Session Greeted Flag": {
+      "main": [
+        [
+          {
+            "node": "Code: Determine First Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Determine First Message": {
+      "main": [
+        [
+          {
+            "node": "IF: First Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: First Message?": {
+      "main": [
+        [
+          {
+            "node": "Redis: Mark Session Greeted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Redis: Get Cached FAQ Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Mark Session Greeted": {
+      "main": [
+        [
+          {
+            "node": "Redis: Get Cached FAQ Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Get Cached FAQ Response": {
+      "main": [
+        [
+          {
+            "node": "IF: Cache Hit?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Cache Hit?": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 - Cached Reply (0 tokens)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: Build Sub-workflow Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch: Route by Role": {
+      "main": [
+        [
+          {
+            "node": "Call Sub-workflow: Sales Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call Sub-workflow: Manager Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call Sub-workflow: Instructor Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call Sub-workflow: SuperAdmin Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 403 - Role Not Recognized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Output Guardrail (re-verify AFTER LLM)": {
+      "main": [
+        [
+          {
+            "node": "IF: Cacheable Response?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Cacheable Response?": {
+      "main": [
+        [
+          {
+            "node": "Redis: Store FAQ Response (5 min TTL)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200 - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis: Store FAQ Response (5 min TTL)": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Build Sub-workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Switch: Route by Role",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Sub-workflow: Sales Agent": {
+      "main": [
+        [
+          {
+            "node": "Output Guardrail (re-verify AFTER LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Sub-workflow: Manager Agent": {
+      "main": [
+        [
+          {
+            "node": "Output Guardrail (re-verify AFTER LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Sub-workflow: Instructor Agent": {
+      "main": [
+        [
+          {
+            "node": "Output Guardrail (re-verify AFTER LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Sub-workflow: SuperAdmin Agent": {
+      "main": [
+        [
+          {
+            "node": "Output Guardrail (re-verify AFTER LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "instanceId": "training-platform-chatbot-architecture-demo"
+  }
+}
