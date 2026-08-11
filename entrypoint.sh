@@ -7,6 +7,17 @@
 # GNU wget does) - found that the hard way, not guessed.
 set -e
 
+# Sources Vault Agent Injector's rendered secret file (if present) before
+# starting - N8N_ENCRYPTION_KEY/N8N_OWNER_PASSWORD/AI_API_KEY/REDIS_PASSWORD
+# arrive as a file at /vault/secrets/env in a Kubernetes deployment with
+# Vault enabled, not as process env vars the way `docker compose`'s
+# env_file delivers them. Falls through unchanged when that file doesn't
+# exist (plain `docker compose up`, no Vault) — same fix already applied
+# to metrics-exporter's Dockerfile (PR #7/#8).
+if [ -f /vault/secrets/env ]; then
+  . /vault/secrets/env
+fi
+
 echo "[entrypoint] Starting n8n..."
 tini -- /docker-entrypoint.sh &
 N8N_PID=$!
