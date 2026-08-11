@@ -14,8 +14,15 @@ set -e
 # env_file delivers them. Falls through unchanged when that file doesn't
 # exist (plain `docker compose up`, no Vault) — same fix already applied
 # to metrics-exporter's Dockerfile (PR #7/#8).
+# `set -a` is required, not optional: plain `. file` only sets shell-local
+# variables, not environment variables, so tini/n8n (spawned right after,
+# below) never actually inherits them without it — confirmed the hard way
+# on a live OKD cluster (this var was silently undefined the whole time
+# without `set -a`).
 if [ -f /vault/secrets/env ]; then
+  set -a
   . /vault/secrets/env
+  set +a
 fi
 
 echo "[entrypoint] Starting n8n..."
