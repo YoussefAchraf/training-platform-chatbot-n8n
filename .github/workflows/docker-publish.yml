@@ -48,3 +48,44 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      # Same loop-closing step as docker-publish-n8n.yml - see that
+      # workflow's own comment for the full rationale. Targets
+      # metricsExporter.image.tag instead of n8n.image.tag (kept for
+      # consistency even though metricsExporter.enabled is currently
+      # false in the gitops repo - low urgency, but correct if it's ever
+      # re-enabled).
+      - name: Checkout training-platform-gitops
+        uses: actions/checkout@v7
+        with:
+          repository: YoussefAchraf/training-platform-gitops
+          token: ${{ secrets.GITOPS_REPO_TOKEN }}
+          ref: dev
+          path: gitops-bump
+
+      - name: Bump metrics-exporter image tag in training-platform-gitops
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
+        working-directory: gitops-bump
+        run: |
+          set -e
+          TAG="sha-$(echo "${{ github.sha }}" | cut -c1-7)"
+          sed -i '/^metricsExporter:/,/^vault:/ s/tag: "sha-[a-f0-9]*"/tag: "'"$TAG"'"/' environments/local-okd/chatbot-values.yaml
+          if git diff --quiet; then
+            echo "Already at $TAG, nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          BRANCH="chore/bump-metrics-exporter-image-$TAG"
+          git checkout -b "$BRANCH"
+          git add environments/local-okd/chatbot-values.yaml
+          git commit -m "Bump metrics-exporter image tag to $TAG
+
+          Auto-opened after training-platform-chatbot-n8n's own CI pushed a
+          new metrics-exporter image. Source: youssefachraf/training-platform-chatbot-n8n@${{ github.sha }}"
+          git push origin "$BRANCH"
+          gh pr create --repo YoussefAchraf/training-platform-gitops --base dev --head "$BRANCH" \
+            --title "Bump metrics-exporter image tag to $TAG" \
+            --body "Auto-opened after training-platform-chatbot-n8n's CI pushed ghcr.io/youssefachraf/training-platform-chatbot-n8n-metrics-exporter:$TAG. Auto-merges once dev's required checks pass. Source: youssefachraf/training-platform-chatbot-n8n@${{ github.sha }}"
+          gh pr merge --repo YoussefAchraf/training-platform-gitops "$BRANCH" --auto --merge
