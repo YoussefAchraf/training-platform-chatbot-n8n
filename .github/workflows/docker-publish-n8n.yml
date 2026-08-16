@@ -80,3 +80,48 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Closes the loop training-platform-gitops's own values files can't
+      # close on their own: image tags there are deliberately pinned
+      # (never `latest`), so without this, a new image published here just
+      # sits in GHCR until someone manually bumps the tag over there.
+      # Opens a PR bumping environments/local-okd/chatbot-values.yaml's
+      # n8n.image.tag - only into gitops's `dev`, never main; promoting dev
+      # to what's actually live stays that repo's own deliberate manual
+      # step, unchanged. This workflow already only fires on the real
+      # push-to-main publish path (see the path-filtered trigger above),
+      # so no extra guard is needed here.
+      - name: Checkout training-platform-gitops
+        uses: actions/checkout@v7
+        with:
+          repository: YoussefAchraf/training-platform-gitops
+          token: ${{ secrets.GITOPS_REPO_TOKEN }}
+          ref: dev
+          path: gitops-bump
+
+      - name: Bump n8n image tag in training-platform-gitops
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
+        working-directory: gitops-bump
+        run: |
+          set -e
+          TAG="sha-$(echo "${{ github.sha }}" | cut -c1-7)"
+          sed -i '/^n8n:/,/^redis:/ s/tag: "sha-[a-f0-9]*"/tag: "'"$TAG"'"/' environments/local-okd/chatbot-values.yaml
+          if git diff --quiet; then
+            echo "Already at $TAG, nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          BRANCH="chore/bump-n8n-image-$TAG"
+          git checkout -b "$BRANCH"
+          git add environments/local-okd/chatbot-values.yaml
+          git commit -m "Bump n8n image tag to $TAG
+
+          Auto-opened after training-platform-chatbot-n8n's own CI pushed a
+          new n8n image. Source: youssefachraf/training-platform-chatbot-n8n@${{ github.sha }}"
+          git push origin "$BRANCH"
+          gh pr create --repo YoussefAchraf/training-platform-gitops --base dev --head "$BRANCH" \
+            --title "Bump n8n image tag to $TAG" \
+            --body "Auto-opened after training-platform-chatbot-n8n's CI pushed ghcr.io/youssefachraf/training-platform-chatbot-n8n:$TAG. Auto-merges once dev's required checks pass. Source: youssefachraf/training-platform-chatbot-n8n@${{ github.sha }}"
+          gh pr merge --repo YoussefAchraf/training-platform-gitops "$BRANCH" --auto --merge
