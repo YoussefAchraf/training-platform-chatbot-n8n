@@ -144,7 +144,7 @@
         420
       ],
       "parameters": {
-        "toolDescription": "Create a new Provider, Training, or Client. Set entityType to exactly one of: 'providers', 'trainings', 'clients'. payload fields depend on entityType - providers: {name (required), description (optional)}; trainings: {name (required), providerId (required), description (optional), duration (optional, minutes)}; clients: {companyName (required), email (optional), phone (optional)}. This is a write action - always restate the exact values and get explicit confirmation before calling.",
+        "toolDescription": "Create a new Provider, Training, or Client. Set entityType to exactly one of: 'providers', 'trainings', 'clients'. payload fields depend on entityType - providers: {name (required), description (optional), logoUrl (optional, must start with http:// or https://)}; trainings: {name (required), providerId (required), description (optional), duration (optional integer count), durationUnit (required if duration is set - 'days' or 'hours')}; clients: {companyName (required), email (optional), phone (optional)}. This is a write action - always restate the exact values and get explicit confirmation before calling.",
         "method": "POST",
         "url": "={{ $env.BACKEND_API_URL }}/{entityType}",
         "sendHeaders": true,
@@ -552,7 +552,7 @@
         860
       ],
       "parameters": {
-        "toolDescription": "Update a global calendar event's title and/or eventDate. Requires eventId. Confirm the change before calling.",
+        "toolDescription": "Update a global calendar event's title, eventDate, and/or endDate (all optional - send only what's changing). Requires eventId. Confirm the change before calling.",
         "method": "PATCH",
         "url": "={{ $env.BACKEND_API_URL }}/calendar/global/{eventId}",
         "sendHeaders": true,
@@ -1147,6 +1147,66 @@
           ]
         }
       }
+    },
+    {
+      "id": "tool-list-session-attendees",
+      "name": "Tool: List Session Attendees",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        1520
+      ],
+      "parameters": {
+        "toolDescription": "List the attendees registered for a session, by sessionId. Any authenticated role can call this - use it to answer 'who's attending session X' or to check attendee count/names before adding a new one.",
+        "method": "GET",
+        "url": "={{ $env.BACKEND_API_URL }}/sessions/{sessionId}/attendees",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "parametersHeaders": {
+          "values": [
+            {
+              "name": "Authorization",
+              "valueProvider": "fieldValue",
+              "value": "={{ $json.authHeader }}"
+            }
+          ]
+        },
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "sessionId",
+              "description": "Numeric ID of the session"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tool-get-my-profile",
+      "name": "Tool: Get My Own Profile",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        1520
+      ],
+      "parameters": {
+        "toolDescription": "Get the current logged-in user's own profile (id, firstname, lastname, email, role, status). Use for 'what's my role/email/status' style questions - never fabricate this, always call the tool.",
+        "method": "GET",
+        "url": "={{ $env.BACKEND_API_URL }}/auth/me",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "parametersHeaders": {
+          "values": [
+            {
+              "name": "Authorization",
+              "valueProvider": "fieldValue",
+              "value": "={{ $json.authHeader }}"
+            }
+          ]
+        }
+      }
     }
   ],
   "connections": {
@@ -1503,6 +1563,28 @@
       ]
     },
     "Tool: View Audit Log (Manager scoped / SuperAdmin full)": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent (SuperAdmin)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: List Session Attendees": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent (SuperAdmin)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: Get My Own Profile": {
       "ai_tool": [
         [
           {
