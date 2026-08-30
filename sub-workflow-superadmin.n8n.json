@@ -1235,6 +1235,44 @@
           ]
         }
       }
+    },
+    {
+      "id": "tool-delete-attendee",
+      "name": "Tool: Delete Session Attendee",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        1520
+      ],
+      "parameters": {
+        "toolDescription": "Remove an attendee from a session, by sessionId and attendeeId (use List Session Attendees to find the attendeeId). Rejected if the attendee already submitted a survey. This is a DESTRUCTIVE write action - always restate exactly who will be removed and get explicit confirmation before calling.",
+        "method": "DELETE",
+        "url": "={{ $env.BACKEND_API_URL }}/sessions/{sessionId}/attendees/{attendeeId}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "parametersHeaders": {
+          "values": [
+            {
+              "name": "Authorization",
+              "valueProvider": "fieldValue",
+              "value": "={{ $json.authHeader }}"
+            }
+          ]
+        },
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "sessionId",
+              "description": "Numeric ID of the session"
+            },
+            {
+              "name": "attendeeId",
+              "description": "Numeric ID of the attendee (from List Session Attendees)"
+            }
+          ]
+        }
+      }
     }
   ],
   "connections": {
@@ -1613,6 +1651,17 @@
       ]
     },
     "Tool: Update Session Attendee": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent (SuperAdmin)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: Delete Session Attendee": {
       "ai_tool": [
         [
           {
