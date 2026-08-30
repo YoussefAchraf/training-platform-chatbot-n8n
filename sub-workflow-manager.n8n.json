@@ -327,7 +327,7 @@
         640
       ],
       "parameters": {
-        "toolDescription": "Change a session's startDate and/or endDate (ISO 8601). Requires sessionId. Only the creator can edit it (except SuperAdmin), and it's blocked once a survey or report already exists for that session. Confirm the new dates before calling.",
+        "toolDescription": "Change a session's startDate, endDate, and/or includeWeekends (all optional - send only what's changing; includeWeekends controls whether weekend days inside the date range count as real training days). Requires sessionId. Only the creator can edit it (except SuperAdmin), and it's blocked once a survey or report already exists for that session. Confirm the new dates before calling.",
         "method": "PATCH",
         "url": "={{ $env.BACKEND_API_URL }}/sessions/{sessionId}",
         "sendHeaders": true,
