@@ -294,7 +294,7 @@
         420
       ],
       "parameters": {
-        "toolDescription": "Schedule a new training session. Requires trainingId, clientId, startDate, endDate (ISO 8601 date-times; endDate must be after startDate). Rejected if another session for the SAME training already starts at the exact same moment. Confirm the training and client exist first (List Catalog Entities) and restate the exact dates before calling - this is a write action.",
+        "toolDescription": "Schedule a new training session. Requires trainingId, clientId, startDate, endDate (ISO 8601 date-times; endDate must be after startDate). Optional includeWeekends (boolean, default false): whether weekend days inside a multi-day date range are real training days (true) or skipped/non-training days (false). Rejected if another session for the SAME training already starts at the exact same moment. Confirm the training and client exist first (List Catalog Entities), and ask about weekends if the range spans one, before calling - this is a write action.",
         "method": "POST",
         "url": "={{ $env.BACKEND_API_URL }}/sessions",
         "sendHeaders": true,
@@ -1190,6 +1190,51 @@
           ]
         }
       }
+    },
+    {
+      "id": "tool-update-attendee",
+      "name": "Tool: Update Session Attendee",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        1520
+      ],
+      "parameters": {
+        "toolDescription": "Edit an attendee's name and/or email, by sessionId and attendeeId (use List Session Attendees to find the attendeeId). Rejected if the new email is already registered in a different session whose time overlaps this one. Confirm the exact change before calling - this is a write action.",
+        "method": "PATCH",
+        "url": "={{ $env.BACKEND_API_URL }}/sessions/{sessionId}/attendees/{attendeeId}",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "model",
+        "specifyHeaders": "keypair",
+        "parametersHeaders": {
+          "values": [
+            {
+              "name": "Authorization",
+              "valueProvider": "fieldValue",
+              "value": "={{ $json.authHeader }}"
+            },
+            {
+              "name": "Content-Type",
+              "valueProvider": "fieldValue",
+              "value": "application/json"
+            }
+          ]
+        },
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "sessionId",
+              "description": "Numeric ID of the session"
+            },
+            {
+              "name": "attendeeId",
+              "description": "Numeric ID of the attendee (from List Session Attendees)"
+            }
+          ]
+        }
+      }
     }
   ],
   "connections": {
@@ -1557,6 +1602,17 @@
       ]
     },
     "Tool: Get My Own Profile": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent (SuperAdmin)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: Update Session Attendee": {
       "ai_tool": [
         [
           {
