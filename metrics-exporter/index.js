@@ -1,17 +1,5 @@
-// Polls n8n's own execution history for the 5 chatbot workflows (the trunk
-// plus the 4 role sub-workflows) and turns what it finds into Prometheus
-// metrics: request outcomes, execution duration, token usage, estimated
-// cost, and per-tool call reliability. n8n's own built-in Prometheus
-// metrics (enabled via N8N_METRICS=true) cover generic execution/webhook
-// stats already - this exists only to fill the gap those don't: token/cost
-// data and tool-call outcomes, which live inside each execution's raw data,
-// not in any metric n8n exposes itself.
-//
-// Deliberately a separate service rather than nodes added to the workflow
-// itself - the workflow stays exactly what it was designed to be, and this
-// reads its history from the outside via the same REST API technique used
-// throughout this project's own debugging (login for a session cookie,
-// fetch an execution, decode its flatted-encoded data).
+
+
 const http = require('http');
 const client = require('prom-client');
 const { parse } = require('flatted');
@@ -21,11 +9,7 @@ const OWNER_EMAIL = process.env.N8N_OWNER_EMAIL || 'admin@localhost.local';
 const OWNER_PASSWORD = process.env.N8N_OWNER_PASSWORD || 'ChangeMe123456!';
 const POLL_INTERVAL_MS = Number(process.env.EXPORTER_POLL_INTERVAL_SECONDS || 15) * 1000;
 const EXPORTER_PORT = Number(process.env.EXPORTER_PORT || 9464);
-// No real "cost" figure survives into n8n's stored execution data (only
-// token counts do) - this estimates it from configurable per-million-token
-// prices. A real provider invoice is always the authoritative number; this
-// is for trend-watching (is spend going up, which role/tool drives it),
-// not for accounting.
+
 const PRICE_PROMPT_PER_1M = Number(process.env.AI_PRICE_PROMPT_PER_1M_USD || 0.10);
 const PRICE_COMPLETION_PER_1M = Number(process.env.AI_PRICE_COMPLETION_PER_1M_USD || 0.40);
 
@@ -41,7 +25,6 @@ function log(msg) {
   console.log(`[exporter] ${msg}`);
 }
 
-// ---------------------------------------------------------------- metrics
 const register = new client.Registry();
 client.collectDefaultMetrics({ register, prefix: 'chatbot_exporter_process_' });
 
@@ -96,7 +79,6 @@ const toolCallsTotal = new client.Counter({
   registers: [register],
 });
 
-// ----------------------------------------------- n8n REST client (session)
 function request(method, path, body, cookie) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, N8N_BASE);
@@ -109,7 +91,7 @@ function request(method, path, body, cookie) {
       res.on('data', (c) => { data += c; });
       res.on('end', () => {
         let json = null;
-        try { json = data ? JSON.parse(data) : null; } catch (e) { /* non-JSON */ }
+        try { json = data ? JSON.parse(data) : null; } catch (e) {  }
         const setCookie = res.headers['set-cookie'];
         resolve({ status: res.statusCode, json, raw: data, cookie: setCookie ? setCookie[0].split(';')[0] : null });
       });
@@ -137,22 +119,17 @@ async function apiGet(path) {
   return res;
 }
 
-// ------------------------------------------------------- node-type lookup
-// Refreshed periodically so a renamed/retyped Chat Model node (e.g. after
-// following the README's provider-swap steps) keeps being recognized
-// without needing to redeploy this exporter - matched by node *type*
-// (any @n8n/n8n-nodes-langchain.lmChat* node), not a hardcoded node name.
-const nodeTypeCache = new Map(); // workflowId -> Map(nodeName -> nodeType)
+const nodeTypeCache = new Map(); 
 let nodeTypeCacheLoadedAt = 0;
 const NODE_TYPE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 async function refreshNodeTypes() {
-  // This can run before n8n's bootstrap has finished importing every
-  // workflow (this exporter's login only needs the owner account to
-  // exist, which happens before the workflow imports do) - if any
-  // workflow 404s, don't mark the cache as freshly loaded, so the next
-  // poll cycle (seconds away) retries it instead of waiting out the full
-  // TTL with an empty/stale map for that workflow.
+  
+  
+  
+  
+  
+  
   let allResolved = true;
   for (const wf of WORKFLOWS) {
     const res = await apiGet(`/rest/workflows/${wf.id}`);
@@ -179,8 +156,6 @@ function estimateCostUsd(promptTokens, completionTokens) {
   return (promptTokens / 1_000_000) * PRICE_PROMPT_PER_1M + (completionTokens / 1_000_000) * PRICE_COMPLETION_PER_1M;
 }
 
-// The trunk has no Agent/tool nodes of its own - its outcome is entirely
-// determined by which one terminal "Respond ..." node actually ran.
 const TRUNK_OUTCOME_NODES = [
   ['Respond 401 - Unauthorized', 'unauthorized'],
   ['Respond 429 - Too Many Requests', 'rate_limited'],
@@ -219,7 +194,7 @@ function processSubWorkflowExecution(rd, role, workflowId) {
           if (prompt) tokensTotal.inc({ type: 'prompt', role }, prompt);
           if (completion) tokensTotal.inc({ type: 'completion', role }, completion);
           if (prompt || completion) costTotal.inc({ role }, estimateCostUsd(prompt, completion));
-        } catch (e) { /* an error run or unexpected shape - no tokens to count */ }
+        } catch (e) {  }
       }
       continue;
     }
@@ -232,8 +207,7 @@ function processSubWorkflowExecution(rd, role, workflowId) {
   }
 }
 
-// ------------------------------------------------------------ poll cycle
-const lastSeenId = new Map(); // workflowId -> highest execution id processed
+const lastSeenId = new Map(); 
 
 async function processExecution(wf, execId) {
   const res = await apiGet(`/rest/executions/${execId}?includeData=true`);
@@ -295,7 +269,6 @@ async function pollAll() {
   }
 }
 
-// --------------------------------------------------------------- HTTP
 const server = http.createServer(async (req, res) => {
   if (req.url === '/metrics') {
     res.writeHead(200, { 'Content-Type': register.contentType });
@@ -313,8 +286,8 @@ const server = http.createServer(async (req, res) => {
 
 async function main() {
   log(`starting, n8n base: ${N8N_BASE}`);
-  // n8n itself may still be bootstrapping when this container starts -
-  // keep retrying the first login instead of crashing.
+  
+  
   for (let i = 0; i < 60; i++) {
     try {
       await login();

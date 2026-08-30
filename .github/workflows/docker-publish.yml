@@ -1,9 +1,5 @@
 name: Publish metrics-exporter to GHCR
 
-# n8n itself isn't built here - the n8n service in docker-compose.yml runs
-# the official n8nio/n8n image straight from Docker Hub, so there's no
-# n8n image for this repo to own. metrics-exporter/ is the one real
-# buildable artifact (its own Dockerfile), so that's what gets published.
 on:
   push:
     branches: [main]
@@ -49,12 +45,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      # Same loop-closing step as docker-publish-n8n.yml - see that
-      # workflow's own comment for the full rationale. Targets
-      # metricsExporter.image.tag instead of n8n.image.tag (kept for
-      # consistency even though metricsExporter.enabled is currently
-      # false in the gitops repo - low urgency, but correct if it's ever
-      # re-enabled).
       - name: Checkout training-platform-gitops
         uses: actions/checkout@v7
         with:

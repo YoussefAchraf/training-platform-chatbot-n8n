@@ -1,11 +1,5 @@
 name: Publish n8n image to GHCR
 
-# Based directly on training-platform-backend/-frontend's own
-# docker-build-and-scan.yml pattern (build without pushing, Trivy-scan
-# that build, only push once the scan passes) - kept as one self-contained
-# workflow here rather than their reusable-workflow-call split, since this
-# repo only has the one trigger case (push to main) that split exists to
-# serve over there.
 on:
   push:
     branches: [main]
@@ -40,14 +34,6 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy image scan
-        # CRITICAL only, unlike backend/frontend's CRITICAL,HIGH gate on
-        # their own first-party images - this Dockerfile only adds 4 small
-        # files on top of an unmodified n8nio/n8n base, so HIGH findings
-        # here are inherited from n8n's own dependency tree (confirmed:
-        # first real run found 18, all HIGH/none CRITICAL, all in n8n's
-        # bundled node_modules, none touched by this repo). Gating on HIGH
-        # would fail this workflow permanently on things only an n8n
-        # release, not this repo, can fix.
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: local/training-platform-chatbot-n8n:scan
@@ -81,16 +67,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Closes the loop training-platform-gitops's own values files can't
-      # close on their own: image tags there are deliberately pinned
-      # (never `latest`), so without this, a new image published here just
-      # sits in GHCR until someone manually bumps the tag over there.
-      # Opens a PR bumping environments/local-okd/chatbot-values.yaml's
-      # n8n.image.tag - only into gitops's `dev`, never main; promoting dev
-      # to what's actually live stays that repo's own deliberate manual
-      # step, unchanged. This workflow already only fires on the real
-      # push-to-main publish path (see the path-filtered trigger above),
-      # so no extra guard is needed here.
       - name: Checkout training-platform-gitops
         uses: actions/checkout@v7
         with:

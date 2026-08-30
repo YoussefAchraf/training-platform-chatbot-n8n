@@ -10,11 +10,6 @@ updates:
     schedule:
       interval: "weekly"
 
-  # No root-level entry: dependabot's docker ecosystem only reads an
-  # actual Dockerfile (or k8s YAML), not docker-compose.yml's `image:`
-  # references - confirmed by a failed update job pointing at "/" with
-  # "No Dockerfiles nor Kubernetes YAML found in /". redis/n8n image
-  # bumps in docker-compose.yml aren't something Dependabot can track here.
 
   - package-ecosystem: "github-actions"
     directory: "/"

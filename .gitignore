@@ -1,17 +1,13 @@
-# Logs
 logs
 *.log
 npm-debug.log*
 
-# Dependencies / build output
 node_modules/
 dist/
 
-# Env - holds real credentials, never commit
 .env
 *.local
 
-# Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
