@@ -294,7 +294,7 @@
         420
       ],
       "parameters": {
-        "toolDescription": "Schedule a new training session. Requires trainingId, clientId, startDate, endDate (ISO 8601 date-times; endDate must be after startDate). Confirm the training and client exist first (List Catalog Entities) and restate the exact dates before calling - this is a write action.",
+        "toolDescription": "Schedule a new training session. Requires trainingId, clientId, startDate, endDate (ISO 8601 date-times; endDate must be after startDate). Rejected if another session for the SAME training already starts at the exact same moment. Confirm the training and client exist first (List Catalog Entities) and restate the exact dates before calling - this is a write action.",
         "method": "POST",
         "url": "={{ $env.BACKEND_API_URL }}/sessions",
         "sendHeaders": true,
@@ -402,7 +402,7 @@
         640
       ],
       "parameters": {
-        "toolDescription": "Register an attendee for a session. Requires sessionId and name; email is optional. Confirm the details before calling - this is a write action.",
+        "toolDescription": "Register an attendee for a session, one at a time. Requires sessionId and name; email is optional. Rejected if this person is already registered in a different session whose time overlaps this one. For bulk registration from a spreadsheet, tell the user to use the app's attendee-import feature instead - this tool can't do that. Confirm the details before calling - this is a write action.",
         "method": "POST",
         "url": "={{ $env.BACKEND_API_URL }}/sessions/{sessionId}/attendees",
         "sendHeaders": true,
@@ -671,7 +671,7 @@
         1080
       ],
       "parameters": {
-        "toolDescription": "List the attendees registered for a session, by sessionId. Any authenticated role can call this - use it to answer 'who's attending session X' or to check attendee count/names before adding a new one.",
+        "toolDescription": "List the attendees registered for a session, by sessionId. Any authenticated role can call this, but an Instructor only sees attendees for a session assigned to them. Use it to answer 'who's attending session X', to check attendee count/names before adding a new one, or to find an attendeeId before marking attendance.",
         "method": "GET",
         "url": "={{ $env.BACKEND_API_URL }}/sessions/{sessionId}/attendees",
         "sendHeaders": true,

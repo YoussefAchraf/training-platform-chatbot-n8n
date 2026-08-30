@@ -260,7 +260,7 @@
       "parameters": {
         "respondWith": "json",
         "responseCode": 200,
-        "responseBody": "={{ { \"reply\": \"I can't help with that request. If you think this is a mistake, try rephrasing your question about trainings, sessions, or your account.\" } }}"
+        "responseBody": "={{ { \"reply\": \"I can't help with that request. If you think this is a mistake, try rephrasing your question about trainings, sessions, or your account.\", \"cached\": false } }}"
       }
     },
     {

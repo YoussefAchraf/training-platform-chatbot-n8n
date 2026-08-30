@@ -294,7 +294,7 @@
         420
       ],
       "parameters": {
-        "toolDescription": "Schedule a new training session. Requires trainingId, clientId, startDate, endDate (ISO 8601 date-times; endDate must be after startDate). Confirm the training and client exist first (List Catalog Entities) and restate the exact dates before calling - this is a write action.",
+        "toolDescription": "Schedule a new training session. Requires trainingId, clientId, startDate, endDate (ISO 8601 date-times; endDate must be after startDate). Rejected if another session for the SAME training already starts at the exact same moment. Confirm the training and client exist first (List Catalog Entities) and restate the exact dates before calling - this is a write action.",
         "method": "POST",
         "url": "={{ $env.BACKEND_API_URL }}/sessions",
         "sendHeaders": true,
@@ -402,7 +402,7 @@
         640
       ],
       "parameters": {
-        "toolDescription": "Assign an instructor to a session. sessionId goes in the URL path. Body: JSON object {instructorId: <number>} - the instructor's profile ID, not their user ID (use List Instructors to find it). Confirm both before calling.",
+        "toolDescription": "Assign an instructor to a session. sessionId goes in the URL path. Body: JSON object {instructorId: <number>} - the instructor's profile ID, not their user ID (use List Instructors to find it). The session must already have at least one attendee (add one first if needed). Assignment is immediate and final - there is no accept/refuse step. Rejected if the instructor is already assigned to a different session at the exact same start time (a different time the same day is fine). Confirm both before calling.",
         "method": "POST",
         "url": "={{ $env.BACKEND_API_URL }}/sessions/{sessionId}/assign-instructor",
         "sendHeaders": true,
@@ -444,7 +444,7 @@
         640
       ],
       "parameters": {
-        "toolDescription": "Register an attendee for a session. Requires sessionId and name; email is optional. Confirm the details before calling - this is a write action.",
+        "toolDescription": "Register an attendee for a session, one at a time. Requires sessionId and name; email is optional. Rejected if this person is already registered in a different session whose time overlaps this one. For bulk registration from a spreadsheet, tell the user to use the app's attendee-import feature instead - this tool can't do that. Confirm the details before calling - this is a write action.",
         "method": "POST",
         "url": "={{ $env.BACKEND_API_URL }}/sessions/{sessionId}/attendees",
         "sendHeaders": true,
@@ -819,7 +819,7 @@
         1080
       ],
       "parameters": {
-        "toolDescription": "View the change history (create/update/delete/approve/reject/cancel actions) recorded across the system, optionally filtered by entityType (Provider/Training/Client/Session/User) and/or entityId. As a Manager you will NOT see User-entity changes (that's SuperAdmin-only) - if the backend rejects an entityType=User filter, tell the user that's expected and outside a Manager's visibility, don't retry.",
+        "toolDescription": "View the change history (create/update/delete/approve/reject/cancel actions) recorded across the system, capped at the 200 most recent entries. Optional filters: entityType (Provider/Training/Client/Session/User), entityId, startDate/endDate (ISO 8601 - only entries in that window), roleName (Sales/Manager/Instructor/SuperAdmin - only actions taken by users of that role). As a Manager you will NOT see User-entity changes (that's SuperAdmin-only) - if the backend rejects an entityType=User filter, tell the user that's expected and outside a Manager's visibility, don't retry.",
         "method": "GET",
         "url": "={{ $env.BACKEND_API_URL }}/admin/audit-log",
         "sendHeaders": true,
@@ -844,6 +844,18 @@
             {
               "name": "entityId",
               "valueProvider": "modelOptional"
+            },
+            {
+              "name": "startDate",
+              "valueProvider": "modelOptional"
+            },
+            {
+              "name": "endDate",
+              "valueProvider": "modelOptional"
+            },
+            {
+              "name": "roleName",
+              "valueProvider": "modelOptional"
             }
           ]
         },
@@ -856,6 +868,18 @@
             {
               "name": "entityId",
               "description": "Optional numeric entity ID to filter to a single record"
+            },
+            {
+              "name": "startDate",
+              "description": "Optional ISO 8601 date-time - only entries created at or after this instant"
+            },
+            {
+              "name": "endDate",
+              "description": "Optional ISO 8601 date-time - only entries created at or before this instant"
+            },
+            {
+              "name": "roleName",
+              "description": "Optional filter: only entries by actors with this role - one of Sales, Manager, Instructor, SuperAdmin"
             }
           ]
         }
@@ -871,7 +895,7 @@
         1300
       ],
       "parameters": {
-        "toolDescription": "List the attendees registered for a session, by sessionId. Any authenticated role can call this - use it to answer 'who's attending session X' or to check attendee count/names before adding a new one.",
+        "toolDescription": "List the attendees registered for a session, by sessionId. Any authenticated role can call this, but an Instructor only sees attendees for a session assigned to them. Use it to answer 'who's attending session X', to check attendee count/names before adding a new one, or to find an attendeeId before marking attendance.",
         "method": "GET",
         "url": "={{ $env.BACKEND_API_URL }}/sessions/{sessionId}/attendees",
         "sendHeaders": true,
