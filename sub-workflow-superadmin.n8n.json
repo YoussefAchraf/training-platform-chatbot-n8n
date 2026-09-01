@@ -1273,6 +1273,40 @@
           ]
         }
       }
+    },
+    {
+      "id": "tool-send-password-reset",
+      "name": "Tool: Send Password Reset (SuperAdmin only)",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        1520
+      ],
+      "parameters": {
+        "toolDescription": "Email another user a password-reset link, by their numeric userId. Cannot target another SuperAdmin. No password is ever generated, seen, or transmitted by this action - it only sends a single-use reset link and revokes that account's existing sessions as a precaution. This is a sensitive, access-affecting action - restate the exact target user and get explicit confirmation before calling.",
+        "method": "POST",
+        "url": "={{ $env.BACKEND_API_URL }}/admin/users/{userId}/send-password-reset",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "parametersHeaders": {
+          "values": [
+            {
+              "name": "Authorization",
+              "valueProvider": "fieldValue",
+              "value": "={{ $json.authHeader }}"
+            }
+          ]
+        },
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "userId",
+              "description": "Numeric ID of the user to send a password-reset link to"
+            }
+          ]
+        }
+      }
     }
   ],
   "connections": {
@@ -1662,6 +1696,17 @@
       ]
     },
     "Tool: Delete Session Attendee": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent (SuperAdmin)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: Send Password Reset (SuperAdmin only)": {
       "ai_tool": [
         [
           {
