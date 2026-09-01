@@ -8,6 +8,7 @@ on:
       - "entrypoint.sh"
       - "bootstrap.js"
       - "*.n8n.json"
+      - ".trivyignore"
       - ".github/workflows/docker-publish-n8n.yml"
   workflow_dispatch: {}
 
