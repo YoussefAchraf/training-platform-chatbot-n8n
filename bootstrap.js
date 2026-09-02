@@ -11,7 +11,7 @@ const REDIS_HOST = process.env.REDIS_HOST || 'redis';
 const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD || '';
 const AI_API_KEY = process.env.AI_API_KEY || '';
-const AI_BASE_URL = process.env.AI_BASE_URL || 'https:
+const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.openai.com/v1';
 
 const WORKFLOWS = [
   { id: 'chatbot-sales-agent', path: '/home/node/sub-workflow-sales.n8n.json' },
@@ -192,7 +192,7 @@ async function main() {
   console.log('==================================================================');
   console.log('[bootstrap] Ready.');
   console.log(`  Editor:  http://localhost:5678  (login: ${OWNER_EMAIL})`);
-  console.log('  Webhook: POST http:
+  console.log('  Webhook: POST http://localhost:5678/webhook/chatbot/message');
   if (!AI_API_KEY) {
     console.log('  NOTE: AI_API_KEY is not set - the Chat Model node will error');
     console.log('        at runtime until you set it and recreate the n8n container.');
