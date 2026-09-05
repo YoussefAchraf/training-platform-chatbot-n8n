@@ -22,6 +22,7 @@ COPY --chown=node:node training-platform-chatbot.n8n.json \
     sub-workflow-manager.n8n.json \
     sub-workflow-instructor.n8n.json \
     sub-workflow-superadmin.n8n.json \
+    sub-workflow-developer.n8n.json \
     /home/node/
 
 ENTRYPOINT ["sh", "/entrypoint.sh"]

@@ -26,6 +26,7 @@ services:
       - ./sub-workflow-manager.n8n.json:/home/node/sub-workflow-manager.n8n.json:ro
       - ./sub-workflow-instructor.n8n.json:/home/node/sub-workflow-instructor.n8n.json:ro
       - ./sub-workflow-superadmin.n8n.json:/home/node/sub-workflow-superadmin.n8n.json:ro
+      - ./sub-workflow-developer.n8n.json:/home/node/sub-workflow-developer.n8n.json:ro
       - ./entrypoint.sh:/entrypoint.sh:ro
       - ./bootstrap.js:/bootstrap.js:ro
     depends_on:

@@ -62,7 +62,7 @@
         -180
       ],
       "parameters": {
-        "jsCode": "\n\nconst headers = $input.item.json.headers || {};\nconst rawAuth = headers['authorization'] || headers['Authorization'] || '';\nconst token = rawAuth.startsWith('Bearer ') ? rawAuth.slice(7) : null;\n\nlet role = null;\nlet userId = null;\nlet exp = null;\nlet valid = false;\n\nif (token) {\n  const parts = token.split('.');\n  if (parts.length === 3) {\n    try {\n      const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));\n      role = payload.role || null;\n      userId = payload.userId || null;\n      exp = payload.exp || null;\n      const knownRoles = ['Sales', 'Manager', 'Instructor', 'SuperAdmin'];\n      valid = !!(role && knownRoles.includes(role) && userId && exp && exp * 1000 > Date.now());\n    } catch (err) {\n      valid = false;\n    }\n  }\n}\n\nconst body = $input.item.json.body || {};\nconst message = (body.message || '').toString().slice(0, 2000);\nconst sessionId = body.sessionId || `${userId || 'anon'}-${Date.now()}`;\n\nreturn [{\n  json: {\n    authHeader: rawAuth, \n    role,\n    userId,\n    valid,\n    message,\n    sessionId,\n  },\n}];\n"
+        "jsCode": "\n\nconst headers = $input.item.json.headers || {};\nconst rawAuth = headers['authorization'] || headers['Authorization'] || '';\nconst token = rawAuth.startsWith('Bearer ') ? rawAuth.slice(7) : null;\n\nlet role = null;\nlet userId = null;\nlet exp = null;\nlet valid = false;\n\nif (token) {\n  const parts = token.split('.');\n  if (parts.length === 3) {\n    try {\n      const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));\n      role = payload.role || null;\n      userId = payload.userId || null;\n      exp = payload.exp || null;\n      const knownRoles = ['Sales', 'Manager', 'Instructor', 'SuperAdmin', 'Developer'];\n      valid = !!(role && knownRoles.includes(role) && userId && exp && exp * 1000 > Date.now());\n    } catch (err) {\n      valid = false;\n    }\n  }\n}\n\nconst body = $input.item.json.body || {};\nconst message = (body.message || '').toString().slice(0, 2000);\nconst sessionId = body.sessionId || `${userId || 'anon'}-${Date.now()}`;\n\nreturn [{\n  json: {\n    authHeader: rawAuth, \n    role,\n    userId,\n    valid,\n    message,\n    sessionId,\n  },\n}];\n"
       }
     },
     {
@@ -215,7 +215,7 @@
         140
       ],
       "parameters": {
-        "jsCode": "const data = $('Normalize Rate Counter Value').item.json;\nlet msg = (data.message || '');\n\nconst stripped = msg\n  .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<[^>]+>/g, '')\n  .trim();\n\nconst lower = stripped.toLowerCase();\n\nconst injectionPatterns = [\n  /ignore (all|any|the) (previous|prior|above) instructions?/i,\n  /reveal (your|the) (system prompt|instructions)/i,\n  /you are now (dan|jailbroken|unrestricted)/i,\n  /pretend (you|to) (are|be) (an? )?(unrestricted|uncensored)/i,\n  /act as (if you have|an) no (restrictions|rules|guardrails)/i,\n  /disregard (your|all) (safety|security) (rules|guardrails|instructions)/i,\n];\n\nconst secretPatterns = [\n  /\\bjwt_secret\\b/i,\n  /\\bpostgres_password\\b/i,\n  /\\bredis_password\\b/i,\n  /\\bsmtp_pass\\b/i,\n];\n\nconst roleImpersonationPatterns = [\n  /pretend (i'?m|i am|you'?re|you are) (a |an )?(manager|superadmin|super admin|instructor|sales)/i,\n  /act as (if )?(i'?m|i am) (a |an )?(manager|superadmin|super admin)/i,\n  /(grant|give) me (manager|superadmin|super admin|admin) (access|permissions|rights)/i,\n  /treat me as (a |an )?(manager|superadmin|super admin)/i,\n];\n\nconst tooLong = stripped.length > 1500;\nconst tooShort = stripped.length === 0;\nconst injectionHit = injectionPatterns.some((re) => re.test(stripped));\nconst secretHit = secretPatterns.some((re) => re.test(stripped));\nconst roleHit = roleImpersonationPatterns.some((re) => re.test(stripped));\n\nconst blocked = tooLong || tooShort || injectionHit || secretHit || roleHit;\nlet reason = null;\nif (tooShort) reason = 'empty_message';\nelse if (tooLong) reason = 'message_too_long';\nelse if (injectionHit) reason = 'blocked_injection_pattern';\nelse if (secretHit) reason = 'blocked_secret_reference';\nelse if (roleHit) reason = 'blocked_role_impersonation_attempt';\n\nreturn [{ json: { ...data, message: stripped, blocked, blockReason: reason } }];\n"
+        "jsCode": "const data = $('Normalize Rate Counter Value').item.json;\nlet msg = (data.message || '');\n\nconst stripped = msg\n  .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<[^>]+>/g, '')\n  .trim();\n\nconst lower = stripped.toLowerCase();\n\nconst injectionPatterns = [\n  /ignore (all|any|the) (previous|prior|above) instructions?/i,\n  /reveal (your|the) (system prompt|instructions)/i,\n  /you are now (dan|jailbroken|unrestricted)/i,\n  /pretend (you|to) (are|be) (an? )?(unrestricted|uncensored)/i,\n  /act as (if you have|an) no (restrictions|rules|guardrails)/i,\n  /disregard (your|all) (safety|security) (rules|guardrails|instructions)/i,\n];\n\nconst secretPatterns = [\n  /\\bjwt_secret\\b/i,\n  /\\bpostgres_password\\b/i,\n  /\\bredis_password\\b/i,\n  /\\bsmtp_pass\\b/i,\n];\n\nconst roleImpersonationPatterns = [\n  /pretend (i'?m|i am|you'?re|you are) (a |an )?(manager|superadmin|super admin|instructor|sales|developer)/i,\n  /act as (if )?(i'?m|i am) (a |an )?(manager|superadmin|super admin|developer)/i,\n  /(grant|give) me (manager|superadmin|super admin|admin|developer) (access|permissions|rights)/i,\n  /treat me as (a |an )?(manager|superadmin|super admin|developer)/i,\n];\n\nconst tooLong = stripped.length > 1500;\nconst tooShort = stripped.length === 0;\nconst injectionHit = injectionPatterns.some((re) => re.test(stripped));\nconst secretHit = secretPatterns.some((re) => re.test(stripped));\nconst roleHit = roleImpersonationPatterns.some((re) => re.test(stripped));\n\nconst blocked = tooLong || tooShort || injectionHit || secretHit || roleHit;\nlet reason = null;\nif (tooShort) reason = 'empty_message';\nelse if (tooLong) reason = 'message_too_long';\nelse if (injectionHit) reason = 'blocked_injection_pattern';\nelse if (secretHit) reason = 'blocked_secret_reference';\nelse if (roleHit) reason = 'blocked_role_impersonation_attempt';\n\nreturn [{ json: { ...data, message: stripped, blocked, blockReason: reason } }];\n"
       }
     },
     {
@@ -537,6 +537,22 @@
                 ]
               },
               "outputKey": "SuperAdmin"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Code: Determine First Message').item.json.role }}",
+                    "rightValue": "Developer",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "outputKey": "Developer"
             }
           ]
         },
@@ -726,6 +742,21 @@
       "parameters": {
         "source": "database",
         "workflowId": "chatbot-superadmin-agent",
+        "mode": "once"
+      }
+    },
+    {
+      "id": "exec-developer-subworkflow",
+      "name": "Call Sub-workflow: Developer Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        1240,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": "chatbot-developer-agent",
         "mode": "once"
       }
     }
@@ -952,6 +983,13 @@
         ],
         [
           {
+            "node": "Call Sub-workflow: Developer Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Respond 403 - Role Not Recognized",
             "type": "main",
             "index": 0
@@ -1044,6 +1082,17 @@
       ]
     },
     "Call Sub-workflow: SuperAdmin Agent": {
+      "main": [
+        [
+          {
+            "node": "Output Guardrail (re-verify AFTER LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Sub-workflow: Developer Agent": {
       "main": [
         [
           {

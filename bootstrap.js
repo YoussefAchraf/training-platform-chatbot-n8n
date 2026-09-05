@@ -18,6 +18,7 @@ const WORKFLOWS = [
   { id: 'chatbot-manager-agent', path: '/home/node/sub-workflow-manager.n8n.json' },
   { id: 'chatbot-instructor-agent', path: '/home/node/sub-workflow-instructor.n8n.json' },
   { id: 'chatbot-superadmin-agent', path: '/home/node/sub-workflow-superadmin.n8n.json' },
+  { id: 'chatbot-developer-agent', path: '/home/node/sub-workflow-developer.n8n.json' },
   { id: 'training-platform-chatbot-v2', path: '/home/node/training-platform-chatbot.n8n.json' },
 ];
 
@@ -167,7 +168,7 @@ async function main() {
     log('  The workflow will still import/activate, but the Chat Model node will fail at runtime until then.');
   }
 
-  log(`Importing ${WORKFLOWS.length} workflows (4 role sub-workflows + the trunk)...`);
+  log(`Importing ${WORKFLOWS.length} workflows (5 role sub-workflows + the trunk)...`);
   for (const { path: wfPath } of WORKFLOWS) {
     importWorkflow(wfPath);
   }
