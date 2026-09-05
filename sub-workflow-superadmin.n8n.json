@@ -938,7 +938,7 @@
         1300
       ],
       "parameters": {
-        "toolDescription": "List every user in the system, regardless of status (pending, approved, rejected, deactivated) or role. Use for any 'who are all the users / who is deactivated / who is pending' style question.",
+        "toolDescription": "List every Sales/Manager/Instructor/SuperAdmin user in the system, regardless of status (pending, approved, rejected, deactivated). Developer accounts are a separate, script-only silo and are never included here or manageable via Update/Deactivate/Permanently Delete User - if asked about a Developer account, say plainly it's outside this tool's scope. Use for any 'who are all the users / who is deactivated / who is pending' style question.",
         "method": "GET",
         "url": "={{ $env.BACKEND_API_URL }}/admin/users",
         "sendHeaders": true,
